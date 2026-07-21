@@ -670,6 +670,17 @@ function PortfolioView({ ctx }) {
         </div>
       </Card>
 
+      <HoldingDetailPanel
+        r={detailOpen}
+        txs={detailOpen ? holdingTxs.filter((t) => t.holdingId === detailOpen.id) : []}
+        showBalances={showBalances}
+        fmt={fmt}
+        fmtS={fmtS}
+        onClose={() => setDetailOpen(null)}
+        onEdit={() => { setDetailOpen(null); setEditOpen(detailOpen); }}
+        onLedger={() => { setDetailOpen(null); setLedgerOpen(detailOpen); }}
+      />
+
       {/* Portföy değeri zaman çizelgesi + enflasyon/döviz karşılaştırması */}
       <Card
         title="Portföy değeri zaman çizelgesi"
@@ -1053,16 +1064,6 @@ function PortfolioView({ ctx }) {
         onRemove={(id) => removeHoldingTx(id)}
         fmt={fmt}
       />
-      <HoldingDetailModal
-        r={detailOpen}
-        txs={detailOpen ? holdingTxs.filter((t) => t.holdingId === detailOpen.id) : []}
-        showBalances={showBalances}
-        fmt={fmt}
-        fmtS={fmtS}
-        onClose={() => setDetailOpen(null)}
-        onEdit={() => { setDetailOpen(null); setEditOpen(detailOpen); }}
-        onLedger={() => { setDetailOpen(null); setLedgerOpen(detailOpen); }}
-      />
       <PfHistoryModal
         open={histOpen}
         snapshots={sortedSnaps}
@@ -1285,13 +1286,12 @@ function HoldingLedgerModal({ holding, txs, onClose, onAdd, onRemove, fmt }) {
   );
 }
 
-function HoldingDetailModal({ r, txs, showBalances, fmt, fmtS, onClose, onEdit, onLedger }) {
+// Sayfa içi geniş detay paneli — modal değil, tablonun hemen altına açılan tam genişlikte bir kart.
+function HoldingDetailPanel({ r, txs, showBalances, fmt, fmtS, onClose, onEdit, onLedger }) {
+  const panelRef = React.useRef(null);
   useEffectP(() => {
-    if (!r) return;
-    const onEsc = (e) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onEsc);
-    return () => document.removeEventListener("keydown", onEsc);
-  }, [r, onClose]);
+    if (r && panelRef.current) panelRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [r?.id]);
 
   if (!r) return null;
 
@@ -1299,80 +1299,74 @@ function HoldingDetailModal({ r, txs, showBalances, fmt, fmtS, onClose, onEdit, 
   const series = computeLedgerSeries(txs);
 
   return (
-    <div className="modal-bd" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-h">
-          <div>
-            <h2>
-              <span className="pf-tk-badge" style={{ background: `${r.color}22`, color: r.color, marginRight: 8 }}>{r.name.slice(0, 4)}</span>
-              {r.name}
-            </h2>
-            <p>{r.fullName || r.type} · {r.type}</p>
-          </div>
-          <button type="button" className="icon-btn" onClick={onClose}><Icon name="x" size={18} /></button>
-        </header>
-        <div className="modal-b">
-          <div className="field-row">
-            <div className="pf-cmp-card" style={{ flex: 1 }}>
-              <div className="pf-cmp-l">Adet · Ort. maliyet</div>
-              <div className="pf-cmp-v mono">{r.quantity.toLocaleString("tr-TR", { maximumFractionDigits: 4 })} × ₺{fmt(r.avgCost)}</div>
-            </div>
-            <div className="pf-cmp-card" style={{ flex: 1 }}>
-              <div className="pf-cmp-l">Güncel değer</div>
-              <div className="pf-cmp-v mono">{showBalances ? `₺${fmtS(r.value)}` : "••"}</div>
-            </div>
-            <div className="pf-cmp-card" style={{ flex: 1 }}>
-              <div className="pf-cmp-l">Gerçekleşmemiş K/Z</div>
-              <div className={`pf-cmp-v mono ${r.pl >= 0 ? "pos" : "neg"}`}>{r.pl < 0 ? "−" : "+"}₺{fmtS(Math.abs(r.pl))} <span style={{ fontSize: 12 }}>(%{Math.abs(r.plPct).toFixed(1)})</span></div>
-            </div>
-            {r.ledgerMode && (
-              <div className="pf-cmp-card" style={{ flex: 1 }}>
-                <div className="pf-cmp-l">Gerçekleşmiş K/Z</div>
-                <div className={`pf-cmp-v mono ${r.realizedPL >= 0 ? "pos" : "neg"}`}>{r.realizedPL < 0 ? "−" : "+"}₺{fmtS(Math.abs(r.realizedPL))}</div>
-              </div>
-            )}
-          </div>
-
-          {r.ledgerMode && series.length > 0 ? (
-            <div style={{ marginTop: 16 }}>
-              <AreaChart
-                series={[
-                  { labels: [...series.map((s) => s.date), "Bugün"], values: [...series.map((s) => s.costBasis), series[series.length - 1].costBasis], color: "var(--fg-4)", name: "Maliyet bazı" },
-                  { labels: [...series.map((s) => s.date), "Bugün"], values: [...series.map((s) => s.costBasis), r.value], color: "var(--accent)", name: "Güncel değer" },
-                ]}
-                height={160}
-                formatY={(v) => "₺" + fmtS(v)}
-              />
-              <div className="pf-refresh-note" style={{ marginTop: 10 }}>
-                <Icon name="info" size={13} />
-                <span>Ara tarihlerde piyasa fiyatı geçmişi tutulmuyor — çizgi her işlemden sonraki maliyet bazını, "Bugün" noktası ise güncel değeri gösterir.</span>
-              </div>
-            </div>
-          ) : (
-            <div className="pf-refresh-note" style={{ marginTop: 16 }}>
-              <Icon name="info" size={13} />
-              <span>Zaman içindeki performans grafiği için işlem geçmişini kullanmaya başla.</span>
-            </div>
-          )}
-
-          {recentTxs.length > 0 && (
-            <div className="pf-hist-list" style={{ marginTop: 16 }}>
-              <div className="pf-hist-list-t">Son işlemler</div>
-              {recentTxs.map((t) => (
-                <div key={t.id} className="pf-hist-row">
-                  <span className={t.qty > 0 ? "pos" : "neg"}>{t.qty > 0 ? "Alış" : "Satış"}</span>
-                  <span>{t.date}</span>
-                  <span className="mono">{Math.abs(t.qty).toLocaleString("tr-TR", { maximumFractionDigits: 4 })} × ₺{fmt(t.price)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+    <div ref={panelRef}>
+    <Card
+      title={<><span className="pf-tk-badge" style={{ background: `${r.color}22`, color: r.color, marginRight: 8 }}>{r.name.slice(0, 4)}</span>{r.name}</>}
+      subtitle={`${r.fullName || r.type} · ${r.type}`}
+      action={
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onLedger}><Icon name="clock" size={14} />İşlem ekle</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onEdit}><Icon name="edit" size={14} />Düzenle</button>
+          <button type="button" className="icon-btn" onClick={onClose}><Icon name="x" size={16} /></button>
         </div>
-        <footer className="modal-f">
-          <button type="button" className="btn btn-ghost btn-md" onClick={onLedger}><Icon name="clock" size={15} />İşlem ekle</button>
-          <button type="button" className="btn btn-primary btn-md" onClick={onEdit}><Icon name="edit" size={15} />Düzenle</button>
-        </footer>
+      }
+    >
+      <div className="pf-cmp-grid" style={{ gridTemplateColumns: r.ledgerMode ? "repeat(4, 1fr)" : "repeat(3, 1fr)", marginTop: 0 }}>
+        <div className="pf-cmp-card">
+          <div className="pf-cmp-l">Adet · Ort. maliyet</div>
+          <div className="pf-cmp-v mono">{r.quantity.toLocaleString("tr-TR", { maximumFractionDigits: 4 })} × ₺{fmt(r.avgCost)}</div>
+        </div>
+        <div className="pf-cmp-card">
+          <div className="pf-cmp-l">Güncel değer</div>
+          <div className="pf-cmp-v mono">{showBalances ? `₺${fmtS(r.value)}` : "••"}</div>
+        </div>
+        <div className="pf-cmp-card">
+          <div className="pf-cmp-l">Gerçekleşmemiş K/Z</div>
+          <div className={`pf-cmp-v mono ${r.pl >= 0 ? "pos" : "neg"}`}>{r.pl < 0 ? "−" : "+"}₺{fmtS(Math.abs(r.pl))} <span style={{ fontSize: 12 }}>(%{Math.abs(r.plPct).toFixed(1)})</span></div>
+        </div>
+        {r.ledgerMode && (
+          <div className="pf-cmp-card">
+            <div className="pf-cmp-l">Gerçekleşmiş K/Z</div>
+            <div className={`pf-cmp-v mono ${r.realizedPL >= 0 ? "pos" : "neg"}`}>{r.realizedPL < 0 ? "−" : "+"}₺{fmtS(Math.abs(r.realizedPL))}</div>
+          </div>
+        )}
       </div>
+
+      {r.ledgerMode && series.length > 0 ? (
+        <div style={{ marginTop: 18 }}>
+          <AreaChart
+            series={[
+              { labels: [...series.map((s) => s.date), "Bugün"], values: [...series.map((s) => s.costBasis), series[series.length - 1].costBasis], color: "var(--fg-4)", name: "Maliyet bazı" },
+              { labels: [...series.map((s) => s.date), "Bugün"], values: [...series.map((s) => s.costBasis), r.value], color: "var(--accent)", name: "Güncel değer" },
+            ]}
+            height={280}
+            formatY={(v) => "₺" + fmtS(v)}
+          />
+          <div className="pf-refresh-note" style={{ marginTop: 10 }}>
+            <Icon name="info" size={13} />
+            <span>Ara tarihlerde piyasa fiyatı geçmişi tutulmuyor — çizgi her işlemden sonraki maliyet bazını, "Bugün" noktası ise güncel değeri gösterir.</span>
+          </div>
+        </div>
+      ) : (
+        <div className="pf-refresh-note" style={{ marginTop: 16 }}>
+          <Icon name="info" size={13} />
+          <span>Zaman içindeki performans grafiği için işlem geçmişini kullanmaya başla.</span>
+        </div>
+      )}
+
+      {recentTxs.length > 0 && (
+        <div className="pf-hist-list" style={{ marginTop: 18 }}>
+          <div className="pf-hist-list-t">Son işlemler</div>
+          {recentTxs.map((t) => (
+            <div key={t.id} className="pf-hist-row">
+              <span className={t.qty > 0 ? "pos" : "neg"}>{t.qty > 0 ? "Alış" : "Satış"}</span>
+              <span>{t.date}</span>
+              <span className="mono">{Math.abs(t.qty).toLocaleString("tr-TR", { maximumFractionDigits: 4 })} × ₺{fmt(t.price)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
     </div>
   );
 }
