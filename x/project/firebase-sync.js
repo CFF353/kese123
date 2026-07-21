@@ -90,6 +90,21 @@ window.KESE_FIREBASE_CONFIG = {
 
     const docRef = (uid) => db.collection("users").doc(uid);
 
+    // Şema güncellemeleri (yeni-boş koleksiyon anahtarları) gerçek veri farkı değildir —
+    // yoksa uygulama her yeni alan eklendiğinde açılışta sahte "çakışma" sorusu sorar.
+    function normalizedStore(raw) {
+      try {
+        const o = JSON.parse(raw);
+        const out = {};
+        Object.keys(o).sort().forEach((k) => {
+          const v = o[k];
+          if (Array.isArray(v) && v.length === 0) return;
+          out[k] = v;
+        });
+        return JSON.stringify(out);
+      } catch (e) { return raw; }
+    }
+
     async function pull(uid) {
       const snap = await docRef(uid).get();
       if (!snap.exists) return false;
@@ -97,6 +112,7 @@ window.KESE_FIREBASE_CONFIG = {
       if (!remote || !remote.store) return false;
       const localRaw = localStorage.getItem(STORAGE_KEY) || "";
       if (remote.store === localRaw) { lastPushed = localRaw; return false; }
+      if (normalizedStore(remote.store) === normalizedStore(localRaw)) { lastPushed = localRaw; return false; }
       const localAt = parseInt(localStorage.getItem("kese_local_updated") || "0", 10);
       const remoteAt = remote.updatedAt || 0;
       let useRemote = true;

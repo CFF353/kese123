@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8743", "--directory", "x/project"],
       "port": 8743
+    },
+    {
+      "name": "kese-web-clean",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8744", "--directory", "x/project"],
+      "port": 8744
     }
   ]
 }
