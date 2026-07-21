@@ -150,5 +150,51 @@ window.generateDemoData = function generateDemoData() {
     { id: "h9", name: "ETH", fullName: "Ethereum", type: "Kripto", quantity: 1.4, avgCost: 98000, price: 124500, currency: "TRY", color: "#627eea" },
   ];
 
-  return { accounts, transactions, budgets, debts, scheduled, goals, snapshots, holdings };
+  // Lot defteri — bazı varlıklarda alım/satım geçmişi (analiz kartlarını besler)
+  // Not: ledger'lı varlıkta etkin adet/maliyet bu kayıtlardan hesaplanır — toplamlar üstteki quantity ile tutarlı
+  const mAgo = (n, day) => { const d = new Date(today.getFullYear(), today.getMonth() - n, day || 15); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const holdingTxs = [
+    { id: "htx-d1", holdingId: "h1", date: mAgo(10, 8),  qty: 300,   price: 210,     note: "İlk alım" },
+    { id: "htx-d2", holdingId: "h1", date: mAgo(7, 12),  qty: 300,   price: 238 },
+    { id: "htx-d3", holdingId: "h1", date: mAgo(4, 5),   qty: 400,   price: 262 },
+    { id: "htx-d4", holdingId: "h1", date: mAgo(2, 20),  qty: -150,  price: 290,     note: "Kısmi kâr realizasyonu" },
+    { id: "htx-d5", holdingId: "h6", date: mAgo(11, 3),  qty: 40,    price: 2050 },
+    { id: "htx-d6", holdingId: "h6", date: mAgo(6, 18),  qty: 30,    price: 2320 },
+    { id: "htx-d7", holdingId: "h6", date: mAgo(2, 9),   qty: 25,    price: 2680 },
+    { id: "htx-d8", holdingId: "h8", date: mAgo(9, 25),  qty: 0.10,  price: 1650000 },
+    { id: "htx-d9", holdingId: "h8", date: mAgo(5, 14),  qty: 0.05,  price: 1980000 },
+    { id: "htx-d10", holdingId: "h8", date: mAgo(3, 2),  qty: 0.06,  price: 2250000 },
+    { id: "htx-d11", holdingId: "h8", date: mAgo(1, 11), qty: -0.03, price: 2500000, note: "Zirvede küçük satış" },
+  ];
+
+  // Hedef dağılım (dengeleme kartını besler)
+  const pfTargets = { "Hisse": 35, "Yabancı Hisse": 10, "Fon": 10, "Altın": 20, "Döviz": 10, "Kripto": 15 };
+
+  // Portföy değeri geçmişi (90 gün, 2 gün arayla) — zaman çizelgesi, kıyaslama, dağılım-değişimi
+  // ve "katkı mı piyasa mı" kartlarını besler. Sınıf bazında hafif farklı tempolarda büyür.
+  const typeNow = {};
+  holdings.forEach((h) => { typeNow[h.type] = (typeNow[h.type] || 0) + h.quantity * h.price; });
+  const pfSnapshots = [];
+  for (let i = 90; i >= 2; i -= 2) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    const p = 1 - i / 90; // 0 → 1
+    const byType = {};
+    let value = 0;
+    Object.entries(typeNow).forEach(([type, nowVal], ti) => {
+      const start = 0.80 + ti * 0.02; // her sınıf farklı başlangıç seviyesinden gelir
+      const wob = Math.sin((i / 7) + ti * 1.7) * 0.025; // hafif dalgalanma
+      const v = Math.round(nowVal * (start + (1 - start) * p + wob) * 100) / 100;
+      byType[type] = Math.max(0, v);
+      value += byType[type];
+    });
+    pfSnapshots.push({
+      date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+      value: Math.round(value * 100) / 100,
+      manual: false,
+      usdTry: Math.round((34.6 + 3.85 * p + Math.sin(i / 9) * 0.25) * 100) / 100,
+      byType,
+    });
+  }
+
+  return { accounts, transactions, budgets, debts, scheduled, goals, snapshots, holdings, holdingTxs, pfTargets, pfSnapshots };
 };
