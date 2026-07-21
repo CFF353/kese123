@@ -13292,12 +13292,16 @@ window.keseAI = {
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
       },
-      body: JSON.stringify({ model: "claude-haiku-4-5", max_tokens: 1500, messages }),
+      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1500, messages }),
     });
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) throw new Error("bad-key");
       if (res.status === 429) throw new Error("rate-limit");
-      throw new Error("api-error");
+      let detail = "";
+      try { detail = ((await res.json()).error || {}).message || ""; } catch (e) {}
+      const err = new Error("api-error");
+      err.detail = `HTTP ${res.status}${detail ? " — " + detail : ""}`;
+      throw err;
     }
     const data = await res.json();
     return (data.content || []).map((c) => c.text || "").join("");
@@ -13308,6 +13312,7 @@ window.keseAIErrorText = (e) => {
   if (m === "no-key") return "AI için Ayarlar → \"Yapay zekâ anahtarı\" bölümünden kendi Anthropic API anahtarını gir (console.anthropic.com'dan alınır). Anahtar yalnızca bu cihazda saklanır.";
   if (m === "bad-key") return "API anahtarı geçersiz veya yetkisiz — Ayarlar'dan kontrol et.";
   if (m === "rate-limit") return "Hız sınırına takıldın — biraz bekleyip tekrar dene.";
+  if (m === "api-error" && e.detail) return `Bir hata oluştu: ${e.detail}`;
   return "Bir hata oluştu, tekrar dener misin?";
 };
 
