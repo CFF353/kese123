@@ -74,6 +74,55 @@ function computeLedgerSeries(txsForHolding) {
   return steps;
 }
 
+// FIFO usulü gerçekleşmiş K/Z — Türkiye'de hisse vergilendirmesinde esas alınan yöntem.
+// Satışlar en eski lotları tüketir; yıl bazında kırılım döner.
+function computeFIFO(txsForHolding) {
+  const sorted = [...txsForHolding].sort((a, b) =>
+    a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date));
+  const lots = []; // { qty, price }
+  let realized = 0;
+  const byYear = {};
+  for (const t of sorted) {
+    if (t.qty > 0) {
+      lots.push({ qty: t.qty, price: t.price });
+    } else if (t.qty < 0) {
+      let remain = -t.qty;
+      const year = t.date.slice(0, 4);
+      while (remain > 1e-9 && lots.length) {
+        const lot = lots[0];
+        const take = Math.min(lot.qty, remain);
+        const gain = take * (t.price - lot.price);
+        realized += gain;
+        byYear[year] = (byYear[year] || 0) + gain;
+        lot.qty -= take;
+        remain -= take;
+        if (lot.qty <= 1e-9) lots.shift();
+      }
+    }
+  }
+  return { realized, byYear };
+}
+
+// XIRR — para ağırlıklı yıllık getiri. flows: [{date:"YYYY-MM-DD", amount}] (negatif = yatırılan, pozitif = çekilen/güncel değer)
+function computeXIRR(flows) {
+  if (flows.length < 2) return null;
+  const sorted = [...flows].sort((a, b) => a.date.localeCompare(b.date));
+  const hasNeg = sorted.some((f) => f.amount < 0), hasPos = sorted.some((f) => f.amount > 0);
+  if (!hasNeg || !hasPos) return null;
+  const t0 = new Date(sorted[0].date);
+  const spanDays = (new Date(sorted[sorted.length - 1].date) - t0) / 86400000;
+  if (spanDays < 30) return null; // çok kısa aralıkta yıllıklandırma yanıltıcı olur
+  const yrs = (f) => (new Date(f.date) - t0) / (365.25 * 86400000);
+  const npv = (r) => sorted.reduce((s, f) => s + f.amount / Math.pow(1 + r, yrs(f)), 0);
+  let lo = -0.95, hi = 10, flo = npv(lo), fhi = npv(hi);
+  if (!isFinite(flo) || !isFinite(fhi) || flo * fhi > 0) return null;
+  for (let i = 0; i < 90; i++) {
+    const mid = (lo + hi) / 2, fm = npv(mid);
+    if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+  }
+  return ((lo + hi) / 2) * 100;
+}
+
 // holdingTxs'i olmayan (henüz lot defteri kullanılmamış) varlıklarda mevcut quantity/avgCost aynen korunur.
 function getEffectiveHolding(h, holdingTxs) {
   const txs = holdingTxs.filter((t) => t.holdingId === h.id);
@@ -91,7 +140,7 @@ const COINGECKO_IDS = {
 const CCY_CODES = ["USD", "EUR", "GBP", "CHF", "JPY", "AUD", "CAD"];
 
 function PortfolioView({ ctx }) {
-  const { showBalances, holdings, addHolding, updateHolding, removeHolding, pfSnapshots, addPfSnapshot, removePfSnapshot, holdingTxs, addHoldingTx, removeHoldingTx } = ctx;
+  const { showBalances, holdings, addHolding, updateHolding, removeHolding, pfSnapshots, addPfSnapshot, removePfSnapshot, holdingTxs, addHoldingTx, removeHoldingTx, pfTargets, setPfTargets } = ctx;
   const [editOpen, setEditOpen] = useStateP(null);
   const [ledgerOpen, setLedgerOpen] = useStateP(null);
   const [detailOpen, setDetailOpen] = useStateP(null);
@@ -122,13 +171,15 @@ function PortfolioView({ ctx }) {
   const totalPL = totalValue - totalCost;
   const totalPLPct = totalCost ? totalPL / totalCost * 100 : 0;
 
-  // Bugünkü değeri otomatik anlık görüntü olarak kaydet
+  // Bugünkü değeri otomatik anlık görüntü olarak kaydet (sınıf kırılımıyla — dağılım-zaman grafiğini besler)
   useEffectP(() => {
     if (holdings.length === 0) return;
     const todayKey = localYMD(today);
     const existing = pfSnapshots.find((s) => s.date === todayKey);
     if (!existing || Math.abs(existing.value - totalValue) > 0.5 || (usdTry && existing && existing.usdTry !== usdTry)) {
-      addPfSnapshot({ date: todayKey, value: totalValue, manual: false, usdTry: usdTry || (existing && existing.usdTry) });
+      const byType = {};
+      rows.forEach((r) => { byType[r.type] = Math.round(((byType[r.type] || 0) + r.value) * 100) / 100; });
+      addPfSnapshot({ date: todayKey, value: totalValue, manual: false, usdTry: usdTry || (existing && existing.usdTry), byType });
     }
   }, [totalValue, holdings.length, usdTry]);
 
@@ -401,6 +452,87 @@ function PortfolioView({ ctx }) {
   if (benchToggles.xu100 && hasXu100) benchmarkSeries.push({ labels: chartLabels, values: xu100Pct, color: "#a855f7", name: "XU100" });
   if (benchToggles.gold && hasGold) benchmarkSeries.push({ labels: chartLabels, values: goldPct, color: "#f59e0b", name: "Altın" });
 
+  // ── Lot defteri analitiği: XIRR, gerçekleşmiş K/Z (ortalama + FIFO), aylık katkı/çekim ──
+  const ledgerRows = rows.filter((r) => r.ledgerMode);
+  const ledgerTxs = holdingTxs.filter((t) => holdings.some((h) => h.id === t.holdingId));
+  const ledgerValue = ledgerRows.reduce((s, r) => s + r.value, 0);
+
+  const xirr = useMemoP(() => {
+    if (!ledgerRows.length) return null;
+    const ledgerIds = new Set(ledgerRows.map((r) => r.id));
+    const flows = ledgerTxs.filter((t) => ledgerIds.has(t.holdingId)).map((t) => ({ date: t.date, amount: -(t.qty * t.price) }));
+    flows.push({ date: localYMD(today), amount: ledgerValue });
+    return computeXIRR(flows);
+  }, [holdingTxs, ledgerValue]);
+
+  const totalRealized = ledgerRows.reduce((s, r) => s + r.realizedPL, 0);
+  const fifoAll = useMemoP(() => {
+    let realized = 0; const byYear = {};
+    ledgerRows.forEach((r) => {
+      const f = computeFIFO(holdingTxs.filter((t) => t.holdingId === r.id));
+      realized += f.realized;
+      Object.entries(f.byYear).forEach(([y, v]) => { byYear[y] = (byYear[y] || 0) + v; });
+    });
+    return { realized, byYear };
+  }, [holdingTxs, holdings]);
+  const realizedByAsset = ledgerRows.filter((r) => Math.abs(r.realizedPL) > 0.005).sort((a, b) => b.realizedPL - a.realizedPL);
+
+  // Aylık katkı/çekim (son 12 ay)
+  const monthlyFlows = useMemoP(() => {
+    const map = {};
+    ledgerTxs.forEach((t) => {
+      const ym = t.date.slice(0, 7);
+      if (!map[ym]) map[ym] = { in: 0, out: 0 };
+      if (t.qty > 0) map[ym].in += t.qty * t.price;
+      else map[ym].out += -t.qty * t.price;
+    });
+    const months = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      months.push({ ym, label: d.toLocaleDateString("tr-TR", { month: "short" }), in: map[ym]?.in || 0, out: map[ym]?.out || 0 });
+    }
+    return months;
+  }, [holdingTxs]);
+  const anyMonthlyFlow = monthlyFlows.some((m) => m.in > 0 || m.out > 0);
+
+  // Son 30 gün: katkı mı piyasa mı?
+  const contrib30 = (() => {
+    if (!monthAgo) return null;
+    const cutoff = monthAgo.date;
+    const net = ledgerTxs.filter((t) => t.date > cutoff).reduce((s, t) => s + t.qty * t.price, 0);
+    const deltaV = totalValue - monthAgo.value;
+    return { net, market: deltaV - net, deltaV };
+  })();
+
+  // Hedef dağılım / dengeleme
+  const targetSum = Object.values(pfTargets || {}).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+  const rebalanceRows = HOLDING_TYPES.map((type) => {
+    const cur = allocation.find((a) => a.type === type);
+    const curPct = cur ? cur.pct : 0;
+    const tgt = parseFloat(pfTargets?.[type]) || 0;
+    if (!cur && tgt === 0) return null;
+    const diffTry = (tgt - curPct) / 100 * totalValue;
+    return { type, curPct, tgt, diffTry, color: HOLDING_TYPE_COLORS[type] || "#94a3b8" };
+  }).filter(Boolean);
+  const anyTargets = targetSum > 0;
+
+  // Dağılımın zaman içindeki değişimi (byType'lı snapshot'lar)
+  const typedSnaps = sortedSnaps.filter((s) => s.byType && Object.keys(s.byType).length);
+  const stackedTypes = [...new Set(typedSnaps.flatMap((s) => Object.keys(s.byType)))];
+  const stackedSeries = stackedTypes.map((type) => ({
+    label: type,
+    color: HOLDING_TYPE_COLORS[type] || "#94a3b8",
+    values: typedSnaps.map((s) => s.byType[type] || 0),
+  }));
+  const stackedLabels = typedSnaps.map((s) => { const d = new Date(s.date); return `${d.getDate()}.${d.getMonth() + 1}`; });
+
+  // Senaryo analizi — sınıf bazında % şok
+  const [scenario, setScenario] = useStateP({});
+  const scenarioValue = allocation.reduce((s, a) => s + a.value * (1 + (scenario[a.type] || 0) / 100), 0);
+  const scenarioDelta = scenarioValue - totalValue;
+  const anyScenario = Object.values(scenario).some((v) => v !== 0);
+
   if (holdings.length === 0) {
     return (
       <div className="view view-portfolio">
@@ -467,6 +599,13 @@ function PortfolioView({ ctx }) {
           <div className="pf-tk-l">Aylık</div>
           <div className={`pf-tk-v pf-tk-v-sm mono ${monthChangePct >= 0 ? "pos" : "neg"}`}>{monthChangePct === null ? "—" : `${monthChangePct >= 0 ? "+" : ""}%${monthChangePct.toFixed(1)}`}</div>
         </div>
+        {xirr !== null && (
+          <div className="pf-tk-cell">
+            <div className="pf-tk-l">Yıllık getiri (XIRR)</div>
+            <div className={`pf-tk-v pf-tk-v-sm mono ${xirr >= 0 ? "pos" : "neg"}`}>{xirr >= 0 ? "+" : ""}%{xirr.toFixed(1)}</div>
+            <div className="pf-tk-pct">işlem geçmişinden</div>
+          </div>
+        )}
         {best && (
           <div className="pf-tk-cell">
             <div className="pf-tk-l">En iyi</div>
@@ -605,6 +744,181 @@ function PortfolioView({ ctx }) {
           <span>Yıllık TÜFE (%)</span>
           <input type="number" min="0" max="200" step="0.5" value={inflRate} onChange={(e) => { const v = Math.max(0, +e.target.value || 0); setInflRate(v); try { localStorage.setItem("kese_inflation", String(v)); } catch (er) {} }} />
         </label>
+      </Card>
+
+      {/* Son 30 gün: katkı mı piyasa mı? */}
+      {contrib30 && ledgerTxs.length > 0 && (
+        <Card title="Son 30 gün: katkı mı, piyasa mı?" subtitle="Portföy büyümesinin kaynağı — yatırdığın para ile piyasa hareketinin ayrımı">
+          <div className="pf-cmp-grid">
+            <div className="pf-cmp-card">
+              <div className="pf-cmp-l">Toplam değişim</div>
+              <div className={`pf-cmp-v mono ${contrib30.deltaV >= 0 ? "pos" : "neg"}`}>{contrib30.deltaV < 0 ? "−" : "+"}₺{fmtS(Math.abs(contrib30.deltaV))}</div>
+              <div className="pf-cmp-sub">30 gün önceki değere göre</div>
+            </div>
+            <div className="pf-cmp-card">
+              <div className="pf-cmp-l">Senin katkın</div>
+              <div className={`pf-cmp-v mono ${contrib30.net >= 0 ? "pos" : "neg"}`}>{contrib30.net < 0 ? "−" : "+"}₺{fmtS(Math.abs(contrib30.net))}</div>
+              <div className="pf-cmp-sub">alımlar − satışlar (işlem geçmişinden)</div>
+            </div>
+            <div className="pf-cmp-card">
+              <div className="pf-cmp-l">Piyasa etkisi</div>
+              <div className={`pf-cmp-v mono ${contrib30.market >= 0 ? "pos" : "neg"}`}>{contrib30.market < 0 ? "−" : "+"}₺{fmtS(Math.abs(contrib30.market))}</div>
+              <div className="pf-cmp-sub">fiyat hareketlerinden gelen</div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Aylık katkı/çekim + Gerçekleşmiş K/Z */}
+      {(anyMonthlyFlow || realizedByAsset.length > 0) && (
+        <div className="grid-2col pf-grid">
+          <Card title="Aylık katkı ve çekim" subtitle="İşlem geçmişine göre portföye giren/çıkan para (son 12 ay)">
+            {anyMonthlyFlow ? (
+              <BarChart
+                data={monthlyFlows.map((m) => ({ label: m.label, values: [m.in, m.out], colors: ["var(--pos)", "var(--neg)"] }))}
+                height={190}
+                seriesLabels={["Yatırılan", "Çekilen"]}
+                formatY={(v) => "₺" + fmtS(v)}
+                formatTooltipValue={(v) => "₺" + fmt(v)}
+              />
+            ) : (
+              <div className="pf-hist-empty"><p>Varlıklarına alış/satış işlemleri girdikçe aylık para akışın burada görünür.</p></div>
+            )}
+          </Card>
+
+          <Card title="Gerçekleşmiş K/Z" subtitle="Satışlardan cebe giren/çıkan kâr — henüz satılmamış kâğıt kârı değil">
+            {realizedByAsset.length > 0 ? (
+              <>
+                <div className="pf-cmp-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 0 }}>
+                  <div className="pf-cmp-card">
+                    <div className="pf-cmp-l">Ortalama maliyet usulü</div>
+                    <div className={`pf-cmp-v mono ${totalRealized >= 0 ? "pos" : "neg"}`}>{totalRealized < 0 ? "−" : "+"}₺{fmtS(Math.abs(totalRealized))}</div>
+                  </div>
+                  <div className="pf-cmp-card">
+                    <div className="pf-cmp-l">FIFO usulü (vergide esas)</div>
+                    <div className={`pf-cmp-v mono ${fifoAll.realized >= 0 ? "pos" : "neg"}`}>{fifoAll.realized < 0 ? "−" : "+"}₺{fmtS(Math.abs(fifoAll.realized))}</div>
+                  </div>
+                </div>
+                <div className="pf-alloc-legend" style={{ marginTop: 14 }}>
+                  {realizedByAsset.map((r) => (
+                    <div key={r.id} className="pf-leg-row">
+                      <span className="pf-leg-dot" style={{ background: r.color }} />
+                      <span className="pf-leg-name">{r.name}</span>
+                      <span className={`pf-leg-pct mono ${r.realizedPL >= 0 ? "pos" : "neg"}`}>{r.realizedPL < 0 ? "−" : "+"}₺{fmtS(Math.abs(r.realizedPL))}</span>
+                      <span className="pf-leg-val" />
+                    </div>
+                  ))}
+                </div>
+                {Object.keys(fifoAll.byYear).length > 0 && (
+                  <div className="pf-fx-row">
+                    <span className="pf-fx-l"><Icon name="calendar" size={13} />Yıl bazında (FIFO):</span>
+                    {Object.entries(fifoAll.byYear).sort((a, b) => b[0].localeCompare(a[0])).map(([y, v]) => (
+                      <span key={y} className="pf-fx-val mono">{y}: <span className={v >= 0 ? "pos" : "neg"}>{v < 0 ? "−" : "+"}₺{fmtS(Math.abs(v))}</span></span>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="pf-hist-empty"><p>Bir varlıktan satış yaptığında gerçekleşen kâr/zarar burada birikir. Satışlar ortalama maliyetine göre hesaplanır; vergiye esas FIFO kırılımı da gösterilir.</p></div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Hedef dağılım ve dengeleme */}
+      <Card
+        title="Hedef dağılım ve dengeleme"
+        subtitle="Her sınıf için hedef yüzde belirle — sapma ve somut alım/satım önerisi hesaplanır"
+        action={anyTargets && Math.abs(targetSum - 100) > 0.5 ? <span className="pf-fx-src" style={{ color: "var(--warn)" }}>Hedef toplamı %{targetSum.toFixed(0)} — 100 olmalı</span> : null}
+      >
+        <div className="pf-alloc-legend">
+          {rebalanceRows.map((rr) => (
+            <div key={rr.type} className="pf-leg-row" style={{ gridTemplateColumns: "14px 1fr 60px 90px auto" }}>
+              <span className="pf-leg-dot" style={{ background: rr.color }} />
+              <span className="pf-leg-name">{rr.type}</span>
+              <span className="pf-leg-pct mono">%{rr.curPct.toFixed(1)}</span>
+              <span className="pf-infl-row" style={{ margin: 0 }}>
+                <input
+                  type="number" min="0" max="100" step="1"
+                  value={pfTargets?.[rr.type] ?? ""}
+                  placeholder="hedef"
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setPfTargets({ ...(pfTargets || {}), [rr.type]: v === "" ? undefined : Math.max(0, Math.min(100, +v || 0)) });
+                  }}
+                />
+              </span>
+              <span className={`pf-leg-val mono ${Math.abs(rr.diffTry) < totalValue * 0.01 ? "" : rr.diffTry > 0 ? "pos" : "neg"}`}>
+                {rr.tgt === 0 ? "" : Math.abs(rr.diffTry) < totalValue * 0.01 ? "dengede ✓" : rr.diffTry > 0 ? `+₺${fmtS(rr.diffTry)} ekle` : `−₺${fmtS(-rr.diffTry)} azalt`}
+              </span>
+            </div>
+          ))}
+        </div>
+        {!anyTargets && (
+          <div className="pf-risk-note" style={{ marginTop: 12 }}>
+            <Icon name="target" size={13} />
+            <span>Örnek: Hisse %35, Altın %20, Döviz %10... Hedefler toplam %100 olacak şekilde girilir; portföy saptıkça hangi sınıfa ne kadar ekleyip azaltman gerektiği ₺ olarak gösterilir.</span>
+          </div>
+        )}
+      </Card>
+
+      {/* Dağılımın zaman içindeki değişimi */}
+      {typedSnaps.length >= 2 && (
+        <Card title="Dağılımın zaman içindeki değişimi" subtitle="Sınıf bazında portföy değeri — gün gün birikir">
+          <StackedAreaChart series={stackedSeries} labels={stackedLabels} height={220} formatY={(v) => "₺" + fmtS(v)} formatTooltipValue={(v) => "₺" + fmtS(v)} />
+          <div className="legend legend-center">
+            {stackedSeries.map((s) => (
+              <span key={s.label} className="legend-item"><span className="legend-dot" style={{ background: s.color }} />{s.label}</span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Senaryo analizi */}
+      <Card
+        title="Senaryo analizi"
+        subtitle="“Kripto %30 düşerse, altın %20 yükselirse ne olur?” — sınıf bazında şok uygula"
+        action={anyScenario ? <button className="btn btn-ghost btn-sm" onClick={() => setScenario({})}><Icon name="repeat" size={13} />Sıfırla</button> : null}
+      >
+        <div className="pattern-wrap" style={{ alignItems: "start" }}>
+          <div>
+            {allocation.map((a) => (
+              <div key={a.type} className="kp-sim-control" style={{ marginBottom: 12 }}>
+                <div className="kp-sim-label">
+                  <span><span className="pf-leg-dot" style={{ background: a.color, display: "inline-block", marginRight: 6 }} />{a.type}</span>
+                  <strong className={`mono ${(scenario[a.type] || 0) > 0 ? "pos" : (scenario[a.type] || 0) < 0 ? "neg" : ""}`}>{(scenario[a.type] || 0) > 0 ? "+" : ""}%{scenario[a.type] || 0}</strong>
+                </div>
+                <input
+                  type="range" className="kp-sim-range" min="-50" max="100" step="5"
+                  value={scenario[a.type] || 0}
+                  onChange={(e) => setScenario({ ...scenario, [a.type]: +e.target.value })}
+                />
+              </div>
+            ))}
+          </div>
+          <div className="pattern-stats">
+            <div className="pattern-stat">
+              <div className="pattern-stat-h"><Icon name="pie" size={14} />Senaryo sonrası değer</div>
+              <div className="pattern-stat-v mono">{showBalances ? `₺${fmt(scenarioValue)}` : "••"}</div>
+              <div className="pattern-stat-s">şu an ₺{fmtS(totalValue)}</div>
+            </div>
+            <div className="pattern-stat">
+              <div className="pattern-stat-h"><Icon name={scenarioDelta >= 0 ? "trendingUp" : "trendingDown"} size={14} />Fark</div>
+              <div className={`pattern-stat-v mono ${scenarioDelta >= 0 ? "pos" : "neg"}`}>{scenarioDelta < 0 ? "−" : "+"}₺{fmtS(Math.abs(scenarioDelta))}</div>
+              <div className="pattern-stat-s">{totalValue ? `%${(scenarioDelta / totalValue * 100).toFixed(1)}` : "—"}</div>
+            </div>
+            {anyScenario && (
+              <div className="pattern-stat">
+                <div className="pattern-stat-h"><Icon name="info" size={14} />En büyük etki</div>
+                {(() => {
+                  const impacts = allocation.map((a) => ({ type: a.type, imp: a.value * ((scenario[a.type] || 0) / 100) })).sort((x, y) => Math.abs(y.imp) - Math.abs(x.imp));
+                  const top = impacts[0];
+                  return <div className="pattern-stat-insight">{top && top.imp !== 0 ? `${top.type}: ${top.imp < 0 ? "−" : "+"}₺${fmtS(Math.abs(top.imp))}` : "—"}</div>;
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
       </Card>
 
       <div className="grid-2col pf-grid">

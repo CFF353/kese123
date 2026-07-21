@@ -677,6 +677,7 @@ function App() {
   const [holdings, setHoldings] = usePersistentState("holdings", []);
   const [pfSnapshots, setPfSnapshots] = usePersistentState("pfSnapshots", []);
   const [holdingTxs, setHoldingTxs] = usePersistentState("holdingTxs", []);
+  const [pfTargets, setPfTargets] = usePersistentState("pfTargets", {});
   const [notes, setNotes] = usePersistentState("notes", []);
   const [categories, setCategories] = usePersistentState("categories", APP_DATA.categories);
   const [welcomeDismissed, setWelcomeDismissed] = useStateA(() => { try { return !!localStorage.getItem("kese_welcome_seen"); } catch (e) { return true; } });
@@ -1040,7 +1041,7 @@ function App() {
       _app: "Kese Finans Takip",
       _version: 1,
       _exportedAt: new Date().toISOString(),
-      accounts, transactions, debts, budgets, scheduled, goals, snapshots, holdings, notes, categories, pfSnapshots, holdingTxs,
+      accounts, transactions, debts, budgets, scheduled, goals, snapshots, holdings, notes, categories, pfSnapshots, holdingTxs, pfTargets,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1072,6 +1073,7 @@ function App() {
         if (Array.isArray(data.holdings)) setHoldings(data.holdings);
         if (Array.isArray(data.pfSnapshots)) setPfSnapshots(data.pfSnapshots);
         if (Array.isArray(data.holdingTxs)) setHoldingTxs(data.holdingTxs);
+        if (data.pfTargets && typeof data.pfTargets === "object" && !Array.isArray(data.pfTargets)) setPfTargets(data.pfTargets);
         if (Array.isArray(data.notes)) setNotes(data.notes);
         if (Array.isArray(data.categories) && data.categories.length) setCategories(data.categories);
         setSettingsOpen(false);
@@ -1095,6 +1097,7 @@ function App() {
     setHoldings([]);
     setPfSnapshots([]);
     setHoldingTxs([]);
+    setPfTargets({});
     setNotes([]);
     setSettingsOpen(false);
   };
@@ -1113,6 +1116,7 @@ function App() {
     setHoldings(demo.holdings || []);
     setPfSnapshots(demo.pfSnapshots || []);
     setHoldingTxs(demo.holdingTxs || []);
+    setPfTargets(demo.pfTargets || {});
     setNotes(demo.notes || []);
     setSettingsOpen(false);
   };
@@ -1156,6 +1160,8 @@ function App() {
     holdingTxs,
     addHoldingTx,
     removeHoldingTx,
+    pfTargets,
+    setPfTargets,
     pfSnapshots,
     addPfSnapshot,
     removePfSnapshot,
