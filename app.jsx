@@ -534,6 +534,35 @@ function ApiKeyRow({ storageKey, icon, iconBg, iconColor, title, descUnset, plac
   );
 }
 
+// İlk açılış karşılaması — hiç verisi olmayan yeni kullanıcıya demo veriyi öne çıkarır
+function WelcomeModal({ open, onDemo, onFresh }) {
+  if (!open) return null;
+  return (
+    <div className="modal-bd">
+      <div className="modal" style={{ maxWidth: 460 }}>
+        <div className="modal-b" style={{ textAlign: "center", paddingTop: 28 }}>
+          <div className="empty-big-icon" style={{ margin: "0 auto 14px" }}><Icon name="wallet" size={28} /></div>
+          <h2 style={{ margin: "0 0 8px", fontSize: 22, letterSpacing: "-0.01em" }}>Kese'ye hoş geldin 👋</h2>
+          <p style={{ margin: "0 auto 20px", color: "var(--fg-3)", fontSize: 14, lineHeight: 1.6, maxWidth: 360 }}>
+            Kişisel finansını bir CFO gözüyle yönet: hesaplar, bütçe, borç stratejileri, yatırım portföyü ve mali tablolar — hepsi bir arada.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, maxWidth: 320, margin: "0 auto" }}>
+            <button className="btn btn-primary btn-md" style={{ justifyContent: "center" }} onClick={onDemo}>
+              <Icon name="sparkles" size={16} />Örnek veriyle keşfet
+            </button>
+            <button className="btn btn-ghost btn-md" style={{ justifyContent: "center" }} onClick={onFresh}>
+              Kendi verinle başla
+            </button>
+          </div>
+          <p style={{ margin: "18px 0 6px", color: "var(--fg-4)", fontSize: 12 }}>
+            Verilerin yalnızca bu cihazda saklanır — sunucuya gönderilmez.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsModal({ open, onClose, onExport, onImport, onReset, onLoadDemo, stats, onOpenAuth }) {
   const fileRef = React.useRef(null);
   useEffectA(() => {
@@ -650,6 +679,8 @@ function App() {
   const [holdingTxs, setHoldingTxs] = usePersistentState("holdingTxs", []);
   const [notes, setNotes] = usePersistentState("notes", []);
   const [categories, setCategories] = usePersistentState("categories", APP_DATA.categories);
+  const [welcomeDismissed, setWelcomeDismissed] = useStateA(() => { try { return !!localStorage.getItem("kese_welcome_seen"); } catch (e) { return true; } });
+  const dismissWelcome = () => { setWelcomeDismissed(true); try { localStorage.setItem("kese_welcome_seen", "1"); } catch (e) {} };
 
   // Kategorileri APP_DATA ile senkronla (render sırasında) — tüm doğrudan okuyucular anında güncel
   if (APP_DATA.categories !== categories) {
@@ -1164,6 +1195,11 @@ function App() {
         </div>
       </main>
 
+      <WelcomeModal
+        open={!welcomeDismissed && accounts.length === 0 && transactions.length === 0 && holdings.length === 0}
+        onDemo={() => { loadDemo(); dismissWelcome(); }}
+        onFresh={dismissWelcome}
+      />
       <AddTxModal open={modalOpen} onClose={()=>setModalOpen(false)} onSubmit={addTransaction} accounts={accounts} onAddTransfer={addTransfer}/>
       <BulkAddModal open={bulkOpen} onClose={()=>setBulkOpen(false)} onSubmitBulk={addTransactionsBulk} accounts={accounts}/>
 
