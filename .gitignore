@@ -1,0 +1,7 @@
+# Tasarım aracı iterasyon görüntüleri — uygulama tarafından kullanılmıyor (~12MB)
+x/project/screenshots/
+x/project/uploads/
+x/project/.thumbnail
+
+# Yerel Claude ayarları
+.claude/settings.local.json
