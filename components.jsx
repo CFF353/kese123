@@ -65,6 +65,7 @@ function Icon({ name, size = 18, stroke = 1.6, ...rest }) {
     check: <path d="M5 12l5 5L20 7"/>,
     x: <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
     more: <><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></>,
+    calculator: <><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M8 16h.01"/><path d="M12 16h.01"/><path d="M16 16h.01"/><path d="M8 20h.01"/><path d="M12 20h.01"/><path d="M16 20h.01"/></>,
   };
   return <svg {...props}>{paths[name] || paths.more}</svg>;
 }
