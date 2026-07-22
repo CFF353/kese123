@@ -4210,6 +4210,7 @@ function Icon({ name, size = 18, stroke = 1.6, ...rest }) {
     check: <path d="M5 12l5 5L20 7"/>,
     x: <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
     more: <><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></>,
+    calculator: <><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M8 16h.01"/><path d="M12 16h.01"/><path d="M16 16h.01"/><path d="M8 20h.01"/><path d="M12 20h.01"/><path d="M16 20h.01"/></>,
   };
   return <svg {...props}>{paths[name] || paths.more}</svg>;
 }
@@ -14415,11 +14416,154 @@ function Sidebar({ active, onChange, accounts, onOpenSettings }) {
   );
 }
 
+// ── Hesap makinesi ──────────────────────────────
+function calcFormat(n) {
+  if (n == null || isNaN(n) || !isFinite(n)) return "Hata";
+  const rounded = Math.round(n * 1e9) / 1e9; // kayan nokta artıklarını temizle
+  return rounded.toLocaleString("tr-TR", { maximumFractionDigits: 9 });
+}
+function CalculatorPopover({ onClose }) {
+  const [display, setDisplay] = useStateA("0");
+  const [prev, setPrev] = useStateA(null);
+  const [op, setOp] = useStateA(null);
+  const [waiting, setWaiting] = useStateA(false);
+  const [expr, setExpr] = useStateA("");
+
+  const curNum = () => parseFloat(display.replace(/\./g, "").replace(",", ".")) || 0;
+
+  const inputDigit = (d) => {
+    if (waiting) { setDisplay(d); setWaiting(false); return; }
+    if (display === "0") { setDisplay(d); return; }
+    if (display.replace(/[^0-9]/g, "").length >= 12) return;
+    setDisplay(display + d);
+  };
+  const inputComma = () => {
+    if (waiting) { setDisplay("0,"); setWaiting(false); return; }
+    if (!display.includes(",")) setDisplay(display + ",");
+  };
+  const clearAll = () => { setDisplay("0"); setPrev(null); setOp(null); setWaiting(false); setExpr(""); };
+  const backspace = () => {
+    if (waiting) return;
+    setDisplay(display.length > 1 ? display.slice(0, -1) : "0");
+  };
+  const toggleSign = () => { if (display !== "0") setDisplay(display.startsWith("-") ? display.slice(1) : "-" + display); };
+  const percent = () => setDisplay(calcFormat(curNum() / 100));
+
+  const compute = (a, b, o) => {
+    if (o === "+") return a + b;
+    if (o === "−") return a - b;
+    if (o === "×") return a * b;
+    if (o === "÷") return b === 0 ? NaN : a / b;
+    return b;
+  };
+
+  const chooseOp = (nextOp) => {
+    const cur = curNum();
+    if (prev != null && !waiting) {
+      const result = compute(prev, cur, op);
+      setPrev(result);
+      setDisplay(calcFormat(result));
+      setExpr(calcFormat(result) + " " + nextOp);
+    } else {
+      setPrev(cur);
+      setExpr(display + " " + nextOp);
+    }
+    setOp(nextOp);
+    setWaiting(true);
+  };
+
+  const equals = () => {
+    if (op == null || prev == null) return;
+    const cur = curNum();
+    const result = compute(prev, cur, op);
+    setExpr("");
+    setDisplay(calcFormat(result));
+    setPrev(null); setOp(null); setWaiting(true);
+  };
+
+  const onKey = (e) => {
+    if (e.key === "Escape") { onClose(); return; }
+    if (/^[0-9]$/.test(e.key)) { inputDigit(e.key); return; }
+    if (e.key === "," || e.key === ".") { inputComma(); return; }
+    if (e.key === "+") { chooseOp("+"); return; }
+    if (e.key === "-") { chooseOp("−"); return; }
+    if (e.key === "*") { chooseOp("×"); return; }
+    if (e.key === "/") { e.preventDefault(); chooseOp("÷"); return; }
+    if (e.key === "Enter" || e.key === "=") { equals(); return; }
+    if (e.key === "Backspace") { backspace(); return; }
+  };
+
+  useEffectA(() => {
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
+
+  const Key = ({ label, onClick, kind }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        height: 42, borderRadius: 9, border: "1px solid var(--border)", fontFamily: "inherit",
+        fontSize: kind === "digit" ? 15 : 14, fontWeight: 600, cursor: "pointer",
+        background: kind === "op" ? "var(--accent)" : kind === "fn" ? "var(--bg-elev-3)" : "var(--bg-elev-2)",
+        color: kind === "op" ? "var(--accent-fg)" : "var(--fg)",
+      }}
+    >{label}</button>
+  );
+
+  return (
+    <>
+      <div className="bell-backdrop" onClick={onClose} />
+      <div className="bell-popover" style={{ width: 268, padding: 12 }}>
+        <div style={{ padding: "8px 6px 12px", textAlign: "right" }}>
+          <div style={{ fontSize: 11, color: "var(--fg-4)", minHeight: 14, marginBottom: 4 }}>{expr}</div>
+          <div className="mono" style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-0.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display}</div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 7 }}>
+          <Key label="C" kind="fn" onClick={clearAll} />
+          <Key label="±" kind="fn" onClick={toggleSign} />
+          <Key label="%" kind="fn" onClick={percent} />
+          <Key label="÷" kind="op" onClick={() => chooseOp("÷")} />
+
+          <Key label="7" kind="digit" onClick={() => inputDigit("7")} />
+          <Key label="8" kind="digit" onClick={() => inputDigit("8")} />
+          <Key label="9" kind="digit" onClick={() => inputDigit("9")} />
+          <Key label="×" kind="op" onClick={() => chooseOp("×")} />
+
+          <Key label="4" kind="digit" onClick={() => inputDigit("4")} />
+          <Key label="5" kind="digit" onClick={() => inputDigit("5")} />
+          <Key label="6" kind="digit" onClick={() => inputDigit("6")} />
+          <Key label="−" kind="op" onClick={() => chooseOp("−")} />
+
+          <Key label="1" kind="digit" onClick={() => inputDigit("1")} />
+          <Key label="2" kind="digit" onClick={() => inputDigit("2")} />
+          <Key label="3" kind="digit" onClick={() => inputDigit("3")} />
+          <Key label="+" kind="op" onClick={() => chooseOp("+")} />
+
+          <span />
+          <Key label="0" kind="digit" onClick={() => inputDigit("0")} />
+          <Key label="," kind="digit" onClick={inputComma} />
+          <button
+            type="button" onClick={equals}
+            style={{ height: 42, borderRadius: 9, border: "none", fontFamily: "inherit", fontSize: 16, fontWeight: 700, cursor: "pointer", background: "var(--fg)", color: "var(--bg)" }}
+          >=</button>
+
+          <button
+            type="button" onClick={backspace}
+            style={{ gridColumn: "1 / -1", height: 36, marginTop: 2, borderRadius: 9, border: "1px solid var(--border)", fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer", background: "transparent", color: "var(--fg-3)", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}
+          ><Icon name="arrowLeft" size={13} />Sil</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function TopBar({ onAddTransaction, onBulkAdd, ctx }) {
   const { transactions, accounts, budgets, scheduled, goals, onNavigate, setGlobalQuery } = ctx;
   const [q, setQ] = useStateA("");
   const [searchOpen, setSearchOpen] = useStateA(false);
   const [bellOpen, setBellOpen] = useStateA(false);
+  const [calcOpen, setCalcOpen] = useStateA(false);
   const today = appToday();
 
   // ── Arama sonuçları ──
@@ -14530,6 +14674,12 @@ function TopBar({ onAddTransaction, onBulkAdd, ctx }) {
         )}
       </div>
       <div className="topbar-actions">
+        <div className="bell-wrap">
+          <button className="icon-btn" onClick={() => setCalcOpen((v) => !v)} title="Hesap makinesi">
+            <Icon name="calculator" size={18}/>
+          </button>
+          {calcOpen && <CalculatorPopover onClose={() => setCalcOpen(false)} />}
+        </div>
         <div className="bell-wrap">
           <button className="icon-btn" onClick={() => setBellOpen((v) => !v)} title="Bildirimler">
             <Icon name="bell" size={18}/>
