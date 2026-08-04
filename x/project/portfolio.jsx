@@ -247,6 +247,7 @@ function PortfolioView({ ctx }) {
     setPriceRefreshing(true); setPriceRefreshMsg("");
     let updated = 0, skipped = 0;
     let stockKeyMissing = false;
+    let stockErrorDetail = "";
     const stamp = () => appToday().toISOString();
     try {
       // Kripto
@@ -311,6 +312,13 @@ function PortfolioView({ ctx }) {
               const symbols = [...new Set(list.map((h) => h.name.toUpperCase().replace(/\.IS$/i, "")))];
               const r = await fetch(`https://api.twelvedata.com/quote?symbol=${symbols.join(",")}&apikey=${tdKey}${extraParam || ""}`);
               const d = await r.json();
+              // Twelve Data hata durumunda tek bir {code,message,status:"error"} objesi döner —
+              // sembol haritası gibi okunmaya çalışılırsa hepsi sessizce "alınamadı" sayılır.
+              if (d && d.status === "error") {
+                stockErrorDetail = d.message || `Twelve Data hatası (kod ${d.code || "?"})`;
+                skipped += list.length;
+                return;
+              }
               const bySymbol = symbols.length > 1 ? d : { [symbols[0]]: d };
               list.forEach((h) => {
                 const sym = h.name.toUpperCase().replace(/\.IS$/i, "");
@@ -321,7 +329,8 @@ function PortfolioView({ ctx }) {
                   if (ccy === "USD" && usdTryNow) price = price * usdTryNow;
                   else price = null;
                 }
-                if (price) { updateHolding(h.id, { price, lastPriceUpdate: stamp() }); updated++; } else skipped++;
+                if (price) { updateHolding(h.id, { price, lastPriceUpdate: stamp() }); updated++; }
+                else { skipped++; if (!stockErrorDetail && q && q.status === "error") stockErrorDetail = q.message || ""; }
               });
             } catch (e) { skipped += list.length; }
           };
@@ -334,9 +343,11 @@ function PortfolioView({ ctx }) {
       const manualOnly = holdings.filter((h) => !["Kripto", "Döviz", "Altın", "Hisse", "Yabancı Hisse"].includes(h.type)).length;
       setPriceRefreshMsg(
         updated > 0
-          ? `${updated} varlık güncellendi${skipped > 0 ? ` · ${skipped} varlık alınamadı${stockKeyMissing ? " (hisse fiyatı için Ayarlar → \"Hisse senedi fiyat anahtarı\"ndan ücretsiz Twelve Data anahtarı gir)" : ""}` : ""}${manualOnly > 0 ? ` · ${manualOnly} varlık için elle giriş gerekir` : ""}.`
+          ? `${updated} varlık güncellendi${skipped > 0 ? ` · ${skipped} varlık alınamadı${stockKeyMissing ? " (hisse fiyatı için Ayarlar → \"Hisse senedi fiyat anahtarı\"ndan ücretsiz Twelve Data anahtarı gir)" : stockErrorDetail ? ` (Twelve Data: ${stockErrorDetail})` : ""}` : ""}${manualOnly > 0 ? ` · ${manualOnly} varlık için elle giriş gerekir` : ""}.`
           : stockKeyMissing && stockHoldings.length === holdings.length
           ? `Hisse fiyatları için Ayarlar → "Hisse senedi fiyat anahtarı" bölümünden ücretsiz bir Twelve Data anahtarı girmen gerekiyor (twelvedata.com, saniyeler sürer, günlük 800 istek ücretsiz).`
+          : stockErrorDetail
+          ? `Twelve Data hatası: ${stockErrorDetail}`
           : `Fiyat alınamadı — internet bağlantısını kontrol et ya da fiyatları elle güncelle.`
       );
     } catch (e) {
@@ -451,6 +462,13 @@ function PortfolioView({ ctx }) {
   if (benchToggles.usd) benchmarkSeries.push({ labels: chartLabels, values: usdPct, color: "#0ea5e9", name: "USD/TRY" });
   if (benchToggles.xu100 && hasXu100) benchmarkSeries.push({ labels: chartLabels, values: xu100Pct, color: "#a855f7", name: "XU100" });
   if (benchToggles.gold && hasGold) benchmarkSeries.push({ labels: chartLabels, values: goldPct, color: "#f59e0b", name: "Altın" });
+
+  // ── Yıllık portföy gelişimi: her yıldan en son anlık görüntü, çizgisel büyüme için ──
+  const yearlyData = useMemoP(() => {
+    const byYear = {};
+    [...pfSnapshots].sort((a, b) => a.date.localeCompare(b.date)).forEach((s) => { byYear[s.date.slice(0, 4)] = s; });
+    return Object.keys(byYear).sort().map((y) => ({ year: y, value: byYear[y].value }));
+  }, [pfSnapshots]);
 
   // ── Lot defteri analitiği: XIRR, gerçekleşmiş K/Z (ortalama + FIFO), aylık katkı/çekim ──
   const ledgerRows = rows.filter((r) => r.ledgerMode);
@@ -755,6 +773,46 @@ function PortfolioView({ ctx }) {
           <span>Yıllık TÜFE (%)</span>
           <input type="number" min="0" max="200" step="0.5" value={inflRate} onChange={(e) => { const v = Math.max(0, +e.target.value || 0); setInflRate(v); try { localStorage.setItem("kese_inflation", String(v)); } catch (er) {} }} />
         </label>
+      </Card>
+
+      {/* Yıllık portföy gelişimi — çizgisel grafik */}
+      <Card
+        title="Yıllık portföy gelişimi"
+        subtitle="Yıl bazında portföy değeri — çizgisel büyüme"
+      >
+        {yearlyData.length < 2 ? (
+          <div className="pf-hist-empty">
+            <p>En az 2 farklı yıla ait değer birikince yıllık çizgisel grafik burada görünür. Yukarıdaki "Geçmiş değer ekle" ile geçmiş yılların portföy değerini elle girebilirsin (örn. "31.12.2024 tarihinde ₺X'ti").</p>
+          </div>
+        ) : (
+          <>
+            <AreaChart
+              series={[{
+                labels: yearlyData.map((y) => y.year),
+                values: yearlyData.map((y) => y.value),
+                color: "var(--accent)",
+                name: "Portföy değeri",
+                fill: false,
+              }]}
+              height={220}
+              formatY={(v) => "₺" + fmtS(v)}
+              formatTooltipValue={(v) => "₺" + fmt(v)}
+            />
+            <div className="pf-cmp-grid" style={{ gridTemplateColumns: `repeat(${Math.min(yearlyData.length, 6)}, 1fr)` }}>
+              {yearlyData.map((y, i) => {
+                const prev = i > 0 ? yearlyData[i - 1].value : null;
+                const yoy = prev ? (y.value - prev) / prev * 100 : null;
+                return (
+                  <div key={y.year} className="pf-cmp-card">
+                    <div className="pf-cmp-l">{y.year}</div>
+                    <div className="pf-cmp-v mono">{showBalances ? `₺${fmtS(y.value)}` : "••"}</div>
+                    <div className="pf-cmp-sub">{yoy === null ? "—" : <span className={yoy >= 0 ? "pos" : "neg"}>{yoy >= 0 ? "+" : ""}%{yoy.toFixed(1)} YoY</span>}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
       </Card>
 
       {/* Son 30 gün: katkı mı piyasa mı? */}
