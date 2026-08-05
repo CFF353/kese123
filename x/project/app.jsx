@@ -1,5 +1,6 @@
 // App shell: sidebar, topbar, modal, main router
 // ────────────────────────────────────────────
+// build: force-redeploy marker
 
 const { useState: useStateA, useEffect: useEffectA } = React;
 
