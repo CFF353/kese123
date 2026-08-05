@@ -1,48 +1,72 @@
 // Kese+ AI — Doğal dil soru-cevap + otomatik aylık CFO raporu
-// Sağlayıcı: önizlemede window.claude; dışarıda kullanıcının kendi Anthropic API anahtarı (Ayarlar'dan girilir)
+// Sağlayıcı sırası: 1) window.claude (canlı önizleme, ücretsiz) 2) kullanıcının DeepSeek anahtarı
+// (varsa, daha ucuz olduğu için önce o denenir) 3) kullanıcının Anthropic anahtarı
 // ─────────────────────────────────────────────────────────
 
-// ── AI sağlayıcı katmanı ──
-// 1) window.claude varsa (canlı önizleme) onu kullanır
-// 2) Yoksa localStorage'daki "kese_api_key" ile doğrudan Anthropic API'ye gider
 window.keseAI = {
-  hasProvider() {
-    return !!(window.claude && window.claude.complete) || !!localStorage.getItem("kese_api_key");
+  activeProvider() {
+    if (window.claude && window.claude.complete) return "claude-preview";
+    if ((localStorage.getItem("kese_deepseek_key") || "").trim()) return "deepseek";
+    if ((localStorage.getItem("kese_api_key") || "").trim()) return "anthropic";
+    return null;
   },
-  hasOwnKey() { return !!localStorage.getItem("kese_api_key"); },
+  hasProvider() { return !!this.activeProvider(); },
+  hasOwnKey() { return this.activeProvider() === "deepseek" || this.activeProvider() === "anthropic"; },
   async complete(arg) {
     const messages = typeof arg === "string" ? [{ role: "user", content: arg }] : (arg.messages || []);
-    if (window.claude && window.claude.complete) {
+    const provider = this.activeProvider();
+    if (provider === "claude-preview") {
       return await window.claude.complete({ messages });
     }
-    const key = localStorage.getItem("kese_api_key");
-    if (!key) throw new Error("no-key");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1500, messages }),
-    });
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) throw new Error("bad-key");
-      if (res.status === 429) throw new Error("rate-limit");
-      let detail = "";
-      try { detail = ((await res.json()).error || {}).message || ""; } catch (e) {}
-      const err = new Error("api-error");
-      err.detail = `HTTP ${res.status}${detail ? " — " + detail : ""}`;
-      throw err;
+    if (provider === "deepseek") {
+      const key = localStorage.getItem("kese_deepseek_key").trim();
+      const res = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", "authorization": `Bearer ${key}` },
+        body: JSON.stringify({ model: "deepseek-chat", max_tokens: 1500, messages }),
+      });
+      if (!res.ok) {
+        if (res.status === 401) throw new Error("bad-key");
+        if (res.status === 429) throw new Error("rate-limit");
+        let detail = "";
+        try { detail = ((await res.json()).error || {}).message || ""; } catch (e) {}
+        const err = new Error("api-error");
+        err.detail = `HTTP ${res.status}${detail ? " — " + detail : ""}`;
+        throw err;
+      }
+      const data = await res.json();
+      return (data.choices || []).map((c) => c.message?.content || "").join("");
     }
-    const data = await res.json();
-    return (data.content || []).map((c) => c.text || "").join("");
+    if (provider === "anthropic") {
+      const key = localStorage.getItem("kese_api_key").trim();
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 1500, messages }),
+      });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) throw new Error("bad-key");
+        if (res.status === 429) throw new Error("rate-limit");
+        let detail = "";
+        try { detail = ((await res.json()).error || {}).message || ""; } catch (e) {}
+        const err = new Error("api-error");
+        err.detail = `HTTP ${res.status}${detail ? " — " + detail : ""}`;
+        throw err;
+      }
+      const data = await res.json();
+      return (data.content || []).map((c) => c.text || "").join("");
+    }
+    throw new Error("no-key");
   },
 };
 window.keseAIErrorText = (e) => {
   const m = e && e.message;
-  if (m === "no-key") return "AI için Ayarlar → \"Yapay zekâ anahtarı\" bölümünden kendi Anthropic API anahtarını gir (console.anthropic.com'dan alınır). Anahtar yalnızca bu cihazda saklanır.";
+  if (m === "no-key") return "AI için Ayarlar → \"Yapay zekâ anahtarı\" bölümünden ücretsiz bir DeepSeek ya da Anthropic API anahtarı gir. Anahtar yalnızca bu cihazda saklanır.";
   if (m === "bad-key") return "API anahtarı geçersiz veya yetkisiz — Ayarlar'dan kontrol et.";
   if (m === "rate-limit") return "Hız sınırına takıldın — biraz bekleyip tekrar dene.";
   if (m === "api-error" && e.detail) return `Bir hata oluştu: ${e.detail}`;
