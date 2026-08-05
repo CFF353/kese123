@@ -12,6 +12,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8744", "--directory", "x/project"],
       "port": 8744
+    },
+    {
+      "name": "kese-web-fresh",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8745", "--directory", "x/project"],
+      "port": 8745
     }
   ]
 }

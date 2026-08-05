@@ -744,9 +744,17 @@ function SettingsModal({ open, onClose, onExport, onImport, onReset, onLoadDemo,
           <CloudAccountRow onOpenAuth={onOpenAuth} />
 
           <ApiKeyRow
+            storageKey="kese_deepseek_key"
+            icon="sparkles" iconBg="rgba(34,197,94,0.14)" iconColor="#22c55e"
+            title="Yapay zekâ anahtarı (DeepSeek)"
+            descUnset="Ucuz bir DeepSeek API anahtarıyla AI'yı her yerde kullan — girilirse önce bu denenir"
+            placeholder="sk-..."
+          />
+
+          <ApiKeyRow
             storageKey="kese_api_key"
             icon="sparkles" iconBg="rgba(168,85,247,0.14)" iconColor="#a855f7"
-            title="Yapay zekâ anahtarı"
+            title="Yapay zekâ anahtarı (Anthropic)"
             descUnset="Kendi Anthropic API anahtarınla AI'yı her yerde kullan"
             placeholder="sk-ant-..."
           />
